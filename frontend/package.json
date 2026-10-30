@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --base=/assets/mint/mint/ && yarn copy-html-entry",
+    "build": "vite build --base=/assets/mint/mint/ && npm run copy-html-entry",
     "lint": "eslint .",
     "preview": "vite preview",
     "copy-html-entry": "node --input-type=module -e \"import fs from 'fs'; fs.copyFileSync('../mint/public/mint/index.html', '../mint/www/mint.html')\""
