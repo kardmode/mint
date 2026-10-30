@@ -1,5 +1,6 @@
 import frappe
 from frappe import _
+from frappe.utils import flt, cstr
 import json
 import datetime
 from erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool import create_payment_entry_bts, create_journal_entry_bts
@@ -18,11 +19,67 @@ def clear_clearing_date(voucher_type: str, voucher_name: str):
         payment_entry.db_set("clearance_date", None)
 
 
+
+def validate_voucher_permission(doctype, name):
+    if not frappe.has_permission(doctype, "write", doc=name):
+        frappe.throw(_("Permission denied: You cannot modify {0} {1}").format(doctype, name), frappe.PermissionError)
+
+def validate_bank_transaction_permission(bank_transaction_name):
+    if not frappe.has_permission("Bank Transaction", "write", doc=bank_transaction_name):
+        frappe.throw(_("Permission denied: You cannot modify Bank Transaction {0}").format(bank_transaction_name), frappe.PermissionError)
+
+def validate_party_permission(party_type, party):
+    if party and party_type and not frappe.has_permission(party_type, "read", doc=party):
+        frappe.throw(_("Permission denied for {0} {1}").format(party_type, party), frappe.PermissionError)
+
+def set_multi_currency_amounts(pe):
+    """Set real exchange rates when the bank and party/offset accounts differ in currency."""
+    company_currency = frappe.get_cached_value("Company", pe.company, "default_currency")
+    pe.paid_from_account_currency = frappe.get_cached_value("Account", pe.paid_from, "account_currency")
+    pe.paid_to_account_currency = frappe.get_cached_value("Account", pe.paid_to, "account_currency")
+
+    from erpnext.setup.utils import get_exchange_rate
+
+    pe.source_exchange_rate = (
+        1.0
+        if pe.paid_from_account_currency == company_currency
+        else (get_exchange_rate(pe.paid_from_account_currency, company_currency, pe.posting_date) or 1.0)
+    )
+    pe.target_exchange_rate = (
+        1.0
+        if pe.paid_to_account_currency == company_currency
+        else (get_exchange_rate(pe.paid_to_account_currency, company_currency, pe.posting_date) or 1.0)
+    )
+
+    if pe.payment_type == "Receive" and pe.source_exchange_rate:
+        base_amount = flt(pe.received_amount) * pe.target_exchange_rate
+        pe.paid_amount = flt(base_amount / pe.source_exchange_rate, pe.precision("paid_amount"))
+        pe.base_paid_amount = base_amount
+        pe.base_received_amount = base_amount
+    elif pe.payment_type == "Pay" and pe.target_exchange_rate:
+        base_amount = flt(pe.paid_amount) * pe.source_exchange_rate
+        pe.received_amount = flt(base_amount / pe.target_exchange_rate, pe.precision("received_amount"))
+        pe.base_paid_amount = base_amount
+        pe.base_received_amount = base_amount
+    elif pe.payment_type == "Internal Transfer":
+        if pe.paid_from_account_currency == pe.paid_to_account_currency:
+            pe.received_amount = pe.paid_amount
+            pe.base_paid_amount = flt(pe.paid_amount) * pe.source_exchange_rate
+            pe.base_received_amount = pe.base_paid_amount
+        else:
+            base_amount = flt(pe.paid_amount) * pe.source_exchange_rate
+            pe.received_amount = flt(base_amount / pe.target_exchange_rate, pe.precision("received_amount"))
+            pe.base_paid_amount = base_amount
+            pe.base_received_amount = base_amount
+
 @frappe.whitelist()
 def reconcile_vouchers(bank_transaction_name: str | int, vouchers: str, is_new_voucher: bool = False):
 	 
     # updated clear date of all the vouchers based on the bank transaction
+    validate_bank_transaction_permission(bank_transaction_name)
     vouchers = json.loads(vouchers)
+    for v in vouchers:
+        validate_voucher_permission(v["payment_doctype"], v["payment_name"])
     transaction = frappe.get_doc("Bank Transaction", bank_transaction_name)
     
     # Add the vouchers with zero allocation. Save() will perform the allocations and clearance
@@ -178,8 +235,7 @@ def create_internal_transfer(bank_transaction_name: str|int,
     pe.paid_amount = bank_transaction.unallocated_amount
     pe.received_amount = bank_transaction.unallocated_amount
 
-    # TODO: Support multi-currency transactions
-    pe.target_exchange_rate = 1.0
+    set_multi_currency_amounts(pe)
 
     if custom_remarks:
         pe.remarks = remarks
@@ -394,6 +450,7 @@ def create_bulk_payment_entry_and_reconcile(bank_transaction_names: list[str | i
             paid_from = account
             paid_to = transaction_account
         
+        validate_party_permission(party_type, party)
         payment_entry_doc = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": "Pay" if is_withdrawal else "Receive",
@@ -415,6 +472,7 @@ def create_bulk_payment_entry_and_reconcile(bank_transaction_names: list[str | i
             "reference_no": (bank_transaction.reference_number or bank_transaction.description or '')[:140],
         })
 
+        set_multi_currency_amounts(payment_entry_doc)
         payment_entry_doc.insert()
         payment_entry_doc.submit()
 
@@ -438,10 +496,13 @@ def create_payment_entry_and_reconcile(bank_transaction_name: str | int,
     """
         Create a payment entry and reconcile it with the bank transaction
     """
+    if payment_entry_doc.get("party") and payment_entry_doc.get("party_type"):
+        validate_party_permission(payment_entry_doc.get("party_type"), payment_entry_doc.get("party"))
     payment_entry = frappe.get_doc({
         **payment_entry_doc,
         "doctype": "Payment Entry",
     })
+    set_multi_currency_amounts(payment_entry)
     payment_entry.insert()
     payment_entry.submit()
     transaction = reconcile_vouchers(bank_transaction_name, json.dumps([{
@@ -525,3 +586,146 @@ def search_for_transfer_transaction(transaction_id: str | int):
 
     return None
 
+
+
+@frappe.whitelist()
+def auto_reconcile_vouchers(
+    bank_account: str,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    filter_by_reference_date: bool | None = None,
+    from_reference_date: str | None = None,
+    to_reference_date: str | None = None,
+):
+    if not bank_account or not frappe.has_permission("Bank Account", "read", doc=bank_account):
+        frappe.throw(_("Permission denied for Bank Account {0}").format(bank_account), frappe.PermissionError)
+
+    from mint.apis.transactions import get_bank_transactions
+    listed_transactions = get_bank_transactions(bank_account, from_date=from_date, to_date=to_date, all_transactions=False)
+
+    bank_transactions = []
+    for transaction in listed_transactions:
+        tx_name = transaction.name if hasattr(transaction, "name") else transaction.get("name")
+        if frappe.has_permission("Bank Transaction", "write", doc=tx_name):
+            bank_transactions.append(transaction)
+
+    if not bank_transactions:
+        return {
+            "reconciled": 0,
+            "partially_reconciled": 0,
+            "message": _("No unreconciled transactions found to match.")
+        }
+
+    if len(bank_transactions) > 10:
+        frappe.enqueue(
+            method="mint.apis.bank_reconciliation.start_auto_reconcile",
+            queue="long",
+            bank_transactions=bank_transactions,
+            from_date=from_date,
+            to_date=to_date,
+            filter_by_reference_date=filter_by_reference_date,
+            from_reference_date=from_reference_date,
+            to_reference_date=to_reference_date,
+        )
+        return {
+            "queued": True,
+            "count": len(bank_transactions),
+            "message": _("Auto-reconciliation started in the background for {0} transactions.").format(len(bank_transactions))
+        }
+    else:
+        return start_auto_reconcile(
+            bank_transactions,
+            from_date,
+            to_date,
+            filter_by_reference_date,
+            from_reference_date,
+            to_reference_date,
+        )
+
+
+def start_auto_reconcile(
+    bank_transactions, from_date=None, to_date=None, filter_by_reference_date=None, from_reference_date=None, to_reference_date=None
+):
+    from erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool import get_linked_payments
+    
+    frappe.flags.auto_reconcile_vouchers = True
+    reconciled = []
+    partially_reconciled = []
+
+    for transaction in bank_transactions:
+        tx_name = transaction.name if hasattr(transaction, "name") else transaction.get("name")
+        tx_doc = frappe.get_doc("Bank Transaction", tx_name)
+        if flt(tx_doc.unallocated_amount) <= 0:
+            continue
+
+        try:
+            linked_payments = get_linked_payments(
+                tx_name,
+                ["payment_entry", "journal_entry", "sales_invoice"],
+                from_date,
+                to_date,
+                filter_by_reference_date,
+                from_reference_date,
+                to_reference_date,
+            )
+        except Exception:
+            continue
+
+        if not linked_payments:
+            continue
+
+        # Look for exact 1:1 match by amount
+        exact_match = None
+        for payment in linked_payments:
+            paid_amt = flt(payment.get("paid_amount") or payment.get("allocated_amount"))
+            if abs(paid_amt - flt(tx_doc.unallocated_amount)) < 0.001:
+                doctype = payment.get("doctype")
+                pname = payment.get("name")
+                if frappe.has_permission(doctype, "write", doc=pname):
+                    exact_match = payment
+                    break
+
+        if exact_match:
+            vouchers = [{
+                "payment_doctype": exact_match.get("doctype"),
+                "payment_name": exact_match.get("name"),
+                "amount": exact_match.get("paid_amount") or exact_match.get("allocated_amount"),
+            }]
+            try:
+                updated_tx = reconcile_vouchers(tx_name, json.dumps(vouchers), is_new_voucher=False)
+                if updated_tx.status == "Reconciled":
+                    reconciled.append(tx_name)
+                elif flt(tx_doc.unallocated_amount) != flt(updated_tx.unallocated_amount):
+                    partially_reconciled.append(tx_name)
+            except Exception as e:
+                frappe.log_error(title=_("Auto Reconcile Failed for {0}").format(tx_name), message=str(e))
+
+    frappe.flags.auto_reconcile_vouchers = False
+
+    message, indicator = get_auto_reconcile_message(partially_reconciled, reconciled)
+    frappe.publish_realtime("mint_auto_reconcile_completed", {
+        "reconciled": len(reconciled),
+        "partially_reconciled": len(partially_reconciled),
+        "message": message,
+        "indicator": indicator
+    }, user=frappe.session.user)
+
+    return {
+        "reconciled": len(reconciled),
+        "partially_reconciled": len(partially_reconciled),
+        "message": message,
+        "indicator": indicator
+    }
+
+
+def get_auto_reconcile_message(partially_reconciled, reconciled):
+    if not partially_reconciled and not reconciled:
+        return _("No exact matches found for auto reconciliation."), "blue"
+
+    msg = []
+    if reconciled:
+        msg.append(_("{0} transaction(s) fully reconciled.").format(len(reconciled)))
+    if partially_reconciled:
+        msg.append(_("{0} transaction(s) partially reconciled.").format(len(partially_reconciled)))
+
+    return " ".join(msg), "green"

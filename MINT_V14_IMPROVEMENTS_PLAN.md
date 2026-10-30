@@ -215,3 +215,4 @@ Instead of fragile black-box agents, introduce modular AI utilities that feed st
 | **Semantic Matcher** | `mint/mint/apis/ai_matcher.py` (New) | Phase 3 |
 | **Theme / RTL Sync** | `mint/frontend/src/App.tsx` | Phase 4 |
 | **Cross-Platform Build** | `mint/frontend/package.json` | Phase 4 |
+
