@@ -40,9 +40,24 @@ def reconcile_vouchers(bank_transaction_name: str | int, vouchers: str, is_new_v
                 "reconciliation_type": "Voucher Created" if is_new_voucher else "Matched",
             },
         )
-    transaction.validate_duplicate_references()
+    if hasattr(transaction, "validate_duplicate_references"):
+        transaction.validate_duplicate_references()
+    else:
+        # Fallback for ERPNext v14: validate against duplicate voucher references
+        seen = set()
+        for pe in transaction.payment_entries:
+            ref = (pe.payment_document, pe.payment_entry)
+            if ref in seen:
+                frappe.throw(_("Payment Entry {0} already added").format(pe.payment_entry))
+            seen.add(ref)
+
     transaction.allocate_payment_entries()
-    transaction.update_allocated_amount()
+
+    if hasattr(transaction, "update_allocated_amount"):
+        transaction.update_allocated_amount()
+    elif hasattr(transaction, "update_allocations"):
+        transaction.update_allocations()
+
     transaction.set_status()
     transaction.save()
     
@@ -213,7 +228,7 @@ def create_bulk_bank_entry_and_reconcile(bank_transactions: list[str|int],
     output = []
 
     for bank_transaction in bank_transactions:
-        transactions_details = frappe.db.get_value("Bank Transaction", bank_transaction, ["name", "deposit", "withdrawal", "bank_account", "currency", "unallocated_amount", "date", "reference_number", "description"], as_dict=True)
+        transactions_details = frappe.db.get_value("Bank Transaction", bank_transaction, ["name", "deposit", "withdrawal", "bank_account", "currency", "unallocated_amount", "date", "reference_number", "description", "company"], as_dict=True)
 
         is_credit_card = frappe.get_cached_value("Bank Account", transactions_details.bank_account, "is_credit_card")
 
@@ -366,7 +381,7 @@ def create_bulk_payment_entry_and_reconcile(bank_transaction_names: list[str | i
     output = []
 
     for bank_transaction_name in bank_transaction_names:
-        bank_transaction = frappe.db.get_value("Bank Transaction", bank_transaction_name, ["name", "deposit", "withdrawal", "bank_account", "currency", "unallocated_amount", "date", "reference_number", "description"], as_dict=True)
+        bank_transaction = frappe.db.get_value("Bank Transaction", bank_transaction_name, ["name", "deposit", "withdrawal", "bank_account", "currency", "unallocated_amount", "date", "reference_number", "description", "company"], as_dict=True)
 
         transaction_account = frappe.get_cached_value("Bank Account", bank_transaction.bank_account, "account")
 
