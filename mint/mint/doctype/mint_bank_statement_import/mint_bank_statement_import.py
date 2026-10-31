@@ -21,13 +21,12 @@ class MintBankStatementImport(Document):
 		currency: DF.Link | None
 		error: DF.Code | None
 		file: DF.Attach | None
-		file_type: DF.Literal["PDF"]
+		file_type: DF.Literal["PDF", "Excel", "CSV"]
 		status: DF.Literal["Not Started", "Completed", "Error"]
 		transactions: DF.Table[MintBankStatementImportTransactions]
 	# end: auto-generated types
 
 	def before_validate(self):
-
 		account = frappe.get_cached_value("Bank Account", self.bank_account, "account")
 		self.currency = frappe.get_cached_value("Account", account, "account_currency")
 		# For all string amounts, compute the actual amount and type
@@ -47,26 +46,62 @@ class MintBankStatementImport(Document):
 		else:
 			return string_amount.lower().replace("dr", "").replace(" ", ""), "Withdrawal"
 
-	
 	@frappe.whitelist()
 	def process_file(self):
-
 		if not self.file:
 			frappe.throw(_("Please upload a file"))
 
-		if self.file_type == "PDF":
-			self.process_pdf()
-		else:
-			frappe.throw(_("Invalid file type"))
-	
-	def process_pdf(self):
+		try:
+			# Check if Mint AI Settings has enable_ai turned on
+			ai_enabled = False
+			try:
+				ai_settings = frappe.get_single("Mint AI Settings")
+				ai_enabled = bool(getattr(ai_settings, "enable_ai", False))
+			except Exception:
+				ai_enabled = False
+
+			if ai_enabled:
+				self.process_with_ai()
+			elif self.file_type == "PDF":
+				self.process_pdf_legacy()
+			else:
+				self.process_tabular_fallback()
+
+			self.status = "Completed"
+			self.error = None
+		except Exception as e:
+			self.status = "Error"
+			self.error = str(e)
+			frappe.log_error(f"Mint Statement Import Failed: {str(e)}", "Mint Bank Statement Import")
+			raise
+
+	def process_with_ai(self):
 		"""
-		Process the PDF using Google Document AI and extract the transactions.
+		Process file using universal AI statement extractor (PDF, XLSX, XLS, CSV).
+		"""
+		from mint.apis.ai_statement import extract_statement_from_file
+
+		transactions = extract_statement_from_file(self.file)
+		if not transactions:
+			frappe.throw(_("No transactions could be extracted from the file."))
+
+		self.transactions = []
+		for tx in transactions:
+			self.append("transactions", {
+				"date": tx.get("date"),
+				"amount": tx.get("amount"),
+				"type": tx.get("type"),
+				"description": tx.get("description"),
+				"reference": tx.get("reference") or "",
+			})
+
+	def process_pdf_legacy(self):
+		"""
+		Process PDF using legacy Google Document AI if configured.
 		"""
 		from mint.apis.google_ai import run_bank_statement_processor
-		
+
 		transactions = run_bank_statement_processor(self.file)
-		# Order the transactions by date
 		transactions.sort(key=lambda x: frappe.utils.getdate(x.get("date")))
 		self.transactions = []
 		for transaction in transactions:
@@ -74,19 +109,42 @@ class MintBankStatementImport(Document):
 				"date": transaction.get("date"),
 				"amount": transaction.get("amount"),
 				"type": transaction.get("type"),
-				"description": transaction.get("description")
+				"description": transaction.get("description"),
+				"reference": transaction.get("reference") or "",
 			})
-	
+
+	def process_tabular_fallback(self):
+		"""
+		Fallback for Excel/CSV when AI is disabled.
+		"""
+		from mint.apis.statement_import import get_statement_details
+
+		details = get_statement_details(self.file, self.bank_account)
+		final_txs = details.get("final_transactions", [])
+		self.transactions = []
+		for tx in final_txs:
+			withdrawal = float(tx.get("withdrawal") or 0)
+			deposit = float(tx.get("deposit") or 0)
+			tx_type = "Deposit" if deposit > 0 else "Withdrawal"
+			amount = deposit if deposit > 0 else withdrawal
+			self.append("transactions", {
+				"date": tx.get("date"),
+				"amount": amount,
+				"type": tx_type,
+				"description": tx.get("description"),
+				"reference": tx.get("reference") or "",
+			})
+
 	def before_submit(self):
 		# Validate all rows have an amount and a type
 		for transaction in self.transactions:
 			if not transaction.get("amount") or not transaction.get("type"):
 				frappe.throw(_("All rows must have an amount and a type. Missing in row {0}").format(transaction.get("idx")))
-		
+
 	def on_submit(self):
 		if not self.transactions:
 			frappe.throw(_("No transactions found"))
-		
+
 		for transaction in self.transactions:
 			bank_tx = frappe.get_doc({
 				"doctype": "Bank Transaction",
@@ -102,6 +160,3 @@ class MintBankStatementImport(Document):
 			bank_tx.insert()
 			bank_tx.submit()
 			transaction.imported = 1
-
-
-		

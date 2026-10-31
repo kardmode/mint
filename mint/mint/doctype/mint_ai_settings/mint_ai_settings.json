@@ -1,0 +1,159 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-10-31 07:30:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "general_section",
+  "enable_ai",
+  "backend_mode",
+  "copilot_section",
+  "copilot_status",
+  "copilot_agent_role",
+  "direct_provider_section",
+  "api_key",
+  "api_endpoint",
+  "model_name",
+  "parameters_section",
+  "temperature",
+  "max_tokens"
+ ],
+ "fields": [
+  {
+   "fieldname": "general_section",
+   "fieldtype": "Section Break",
+   "label": "General AI Settings"
+  },
+  {
+   "default": "0",
+   "description": "Enable AI-powered statement extraction and semantic party/account suggestions",
+   "fieldname": "enable_ai",
+   "fieldtype": "Check",
+   "label": "Enable AI Features in Mint"
+  },
+  {
+   "default": "ERPNext Copilot",
+   "fieldname": "backend_mode",
+   "fieldtype": "Select",
+   "label": "AI Engine / Provider",
+   "options": "ERPNext Copilot\nGoogle Gemini\nOpenAI\nCustom (OpenAI-Compatible / Ollama)",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.backend_mode=='ERPNext Copilot'",
+   "fieldname": "copilot_section",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Copilot Integration"
+  },
+  {
+   "depends_on": "eval:doc.backend_mode=='ERPNext Copilot'",
+   "description": "Detected automatically from erpnext_ai_bots",
+   "fieldname": "copilot_status",
+   "fieldtype": "Data",
+   "label": "Copilot Bridge Status",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.backend_mode=='ERPNext Copilot'",
+   "description": "Optional: Specific AI Bot Settings profile to use",
+   "fieldname": "copilot_agent_role",
+   "fieldtype": "Data",
+   "label": "Copilot Profile / Bot"
+  },
+  {
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "fieldname": "direct_provider_section",
+   "fieldtype": "Section Break",
+   "label": "Direct AI Provider Settings"
+  },
+  {
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "description": "API Key for direct LLM inference",
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key"
+  },
+  {
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "description": "Base URL (e.g. https://generativelanguage.googleapis.com, https://api.openai.com/v1, or http://localhost:11434/v1)",
+   "fieldname": "api_endpoint",
+   "fieldtype": "Data",
+   "label": "API Endpoint / Base URL"
+  },
+  {
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "description": "e.g. gemini-2.0-flash, gpt-4o-mini, llama3.2",
+   "fieldname": "model_name",
+   "fieldtype": "Data",
+   "label": "Model Identifier"
+  },
+  {
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "fieldname": "parameters_section",
+   "fieldtype": "Section Break",
+   "label": "Inference Parameters"
+  },
+  {
+   "default": "0.1",
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "description": "Lower value (0.0 - 0.2) ensures deterministic financial table extraction",
+   "fieldname": "temperature",
+   "fieldtype": "Float",
+   "label": "Temperature"
+  },
+  {
+   "default": "4000",
+   "depends_on": "eval:doc.backend_mode!='ERPNext Copilot'",
+   "description": "Maximum tokens for the response batch",
+   "fieldname": "max_tokens",
+   "fieldtype": "Int",
+   "label": "Max Tokens"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-31 07:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Mint",
+ "name": "Mint AI Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

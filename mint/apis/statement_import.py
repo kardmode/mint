@@ -16,13 +16,18 @@ from mint.apis.bank_account import set_closing_balance_as_per_statement
 def get_statement_details(file_url: str, bank_account: str):
     """
     Given a file path, try to get bank statement details.
-
-    From the data, we want to "guess" the following:
-    1. Row index of the header row
-    2. Column mapping to standard variables?
-    3. Row indices of all rows after the header row that are relevant - hence look like transactions
-    4. Opening and Closing dates of the statement and balance
+    Supports CSV, XLSX, XLS, and PDF (via AI extraction).
     """
+    ext = ""
+    try:
+        file_doc = frappe.get_doc("File", {"file_url": file_url})
+        parts = file_doc.get_extension()
+        ext = (parts[1] if parts else "").lower()
+    except Exception:
+        ext = ("." + file_url.split(".")[-1]).lower() if "." in file_url else ""
+
+    if ext == ".pdf":
+        return _get_pdf_statement_details(file_url, bank_account)
 
     data = get_data(file_url)
 
@@ -550,3 +555,76 @@ def get_final_transactions(transactions: list, date_format: str, amount_format: 
         })
     
     return final_transactions
+
+def _get_pdf_statement_details(file_url: str, bank_account: str):
+    from mint.apis.ai_statement import extract_statement_from_file
+
+    file_name = file_url.split("/")[-1]
+    extracted = extract_statement_from_file(file_url)
+
+    header_row = ["Date", "Description", "Withdrawal", "Deposit", "Reference"]
+    column_mapping = {"Date": 0, "Description": 1, "Withdrawal": 2, "Deposit": 3, "Reference": 4}
+    columns = header_row
+
+    data = [header_row]
+    transaction_rows = []
+    final_transactions = []
+
+    for tx in extracted:
+        withdrawal = tx["amount"] if tx["type"] == "Withdrawal" else 0.0
+        deposit = tx["amount"] if tx["type"] == "Deposit" else 0.0
+        row = [
+            tx["date"],
+            tx["description"],
+            str(withdrawal) if withdrawal else "",
+            str(deposit) if deposit else "",
+            tx.get("reference", "")
+        ]
+        data.append(row)
+        transaction_rows.append({
+            "date_format": "YYYY-MM-DD",
+            "date": tx["date"],
+            "amount": tx["amount"],
+            "withdrawal": withdrawal,
+            "deposit": deposit,
+            "balance": 0.0,
+            "reference": tx.get("reference", ""),
+            "description": tx.get("description", ""),
+            "transaction_type": tx["type"],
+        })
+        final_transactions.append({
+            "date": tx["date"],
+            "withdrawal": withdrawal,
+            "deposit": deposit,
+            "description": tx.get("description", ""),
+            "reference": tx.get("reference", ""),
+            "transaction_type": tx["type"],
+        })
+
+    statement_start_date = extracted[0]["date"] if extracted else ""
+    statement_end_date = extracted[-1]["date"] if extracted else ""
+    conflicting_transactions = check_for_conflicts(bank_account, statement_start_date, statement_end_date) if statement_start_date else []
+
+    account = frappe.get_cached_value("Bank Account", bank_account, "account")
+    account_currency = frappe.get_cached_value("Account", account, "account_currency")
+
+    return {
+        "file_name": file_name,
+        "file_path": file_url,
+        "data": data,
+        "header_index": 0,
+        "header_row": header_row,
+        "columns": columns,
+        "column_mapping": column_mapping,
+        "transaction_starting_index": 1,
+        "transaction_ending_index": len(data) - 1,
+        "transaction_rows": transaction_rows,
+        "date_format": "YYYY-MM-DD",
+        "amount_format": "#,##0.00",
+        "statement_start_date": statement_start_date,
+        "statement_end_date": statement_end_date,
+        "closing_balance": 0.0,
+        "conflicting_transactions": conflicting_transactions,
+        "final_transactions": final_transactions,
+        "currency": account_currency,
+    }

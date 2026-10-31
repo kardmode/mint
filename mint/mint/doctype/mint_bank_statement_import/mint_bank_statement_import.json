@@ -49,7 +49,7 @@
    "fieldname": "file_type",
    "fieldtype": "Select",
    "label": "File Type",
-   "options": "PDF"
+   "options": "PDF\nExcel\nCSV"
   },
   {
    "fieldname": "error",

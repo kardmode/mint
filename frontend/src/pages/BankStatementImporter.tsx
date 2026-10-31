@@ -103,7 +103,7 @@ const BankStatementImporter = () => {
                                             data-slot="form-description"
                                             className={cn("text-muted-foreground text-xs")}
                                         >
-                                            {_("Upload your bank statement file to start the import process. We support CSV, and XLSX files.")}
+                                            {_("Upload your bank statement file to start the import process. We support PDF, CSV, and XLSX files.")}
                                         </p>
                                     </div>
                                     <div>
@@ -117,6 +117,7 @@ const BankStatementImporter = () => {
                                     files={files}
                                     className="p-8"
                                     accept={{
+                                        'application/pdf': ['.pdf'],
                                         'text/csv': ['.csv'],
                                         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
                                         'application/vnd.ms-excel': ['.xls'],
