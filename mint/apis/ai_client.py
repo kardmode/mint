@@ -304,3 +304,4 @@ class MintAIClient:
 				pass
 
 		raise frappe.ValidationError(_("Failed to parse JSON response from AI: {0}").format(text[:300]))
+

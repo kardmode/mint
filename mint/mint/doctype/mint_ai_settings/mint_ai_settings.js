@@ -28,3 +28,4 @@ frappe.ui.form.on("Mint AI Settings", {
 		});
 	}
 });
+

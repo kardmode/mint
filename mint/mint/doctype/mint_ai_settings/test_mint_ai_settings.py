@@ -6,3 +6,4 @@ from frappe.tests.utils import FrappeTestCase
 
 class TestMintAISettings(FrappeTestCase):
 	pass
+

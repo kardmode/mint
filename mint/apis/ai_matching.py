@@ -130,3 +130,4 @@ def _fetch_candidate_accounts(company: str = None, is_withdrawal: bool = True) -
 	except Exception:
 		pass
 	return accounts
+

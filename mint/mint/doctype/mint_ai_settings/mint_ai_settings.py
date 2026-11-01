@@ -66,3 +66,4 @@ class MintAISettings(Document):
 				"success": False,
 				"message": str(e),
 			}
+
